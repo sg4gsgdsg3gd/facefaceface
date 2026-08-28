@@ -1,0 +1,1270 @@
+     1→     1→import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+     2→     2→import { motion, AnimatePresence } from "framer-motion";
+     3→     3→
+     4→     4→// Types
+     5→     5→type Point = { x: number; y: number };
+     6→     6→type LandmarkDef = {
+     7→     7→  id: string;
+     8→     8→  name: string;
+     9→     9→  group: "Cranial" | "Orbital" | "Nasal" | "Oral" | "Mandibular" | "Zygomatic";
+    10→    10→  mpIndex: number;
+    11→    11→  hint: string;
+    12→    12→};
+    13→    13→
+    14→    14→type CalibratedPoint = Point & { confirmed: boolean };
+    15→    15→
+    16→    16→// 50-point anthropometric set, mapped to MediaPipe FaceLandmarker indices
+    17→    17→const LANDMARKS: LandmarkDef[] = [
+    18→    18→  // Cranial / Upper Face
+    19→    19→  { id: "tr", name: "Trichion", group: "Cranial", mpIndex: 10, hint: "Hairline center" },
+    20→    20→  { id: "g", name: "Glabella", group: "Cranial", mpIndex: 9, hint: "Between eyebrows" },
+    21→    21→  { id: "n", name: "Nasion", group: "Nasal", mpIndex: 168, hint: "Nasal root" },
+    22→    22→  { id: "eb_ml", name: "L. Brow Medial", group: "Cranial", mpIndex: 107, hint: "Left brow head" },
+    23→    23→  { id: "eb_mr", name: "R. Brow Medial", group: "Cranial", mpIndex: 336, hint: "Right brow head" },
+    24→    24→  { id: "eb_pl", name: "L. Brow Peak", group: "Cranial", mpIndex: 52, hint: "Left brow arch" },
+    25→    25→  { id: "eb_pr", name: "R. Brow Peak", group: "Cranial", mpIndex: 282, hint: "Right brow arch" },
+    26→    26→  { id: "eb_ll", name: "L. Brow Tail", group: "Cranial", mpIndex: 70, hint: "Left brow tail" },
+    27→    27→  { id: "eb_lr", name: "R. Brow Tail", group: "Cranial", mpIndex: 300, hint: "Right brow tail" },
+    28→    28→
+    29→    29→  // Orbital
+    30→    30→  { id: "ex_l", name: "Exocanthion L", group: "Orbital", mpIndex: 33, hint: "Left eye outer corner" },
+    31→    31→  { id: "ex_r", name: "Exocanthion R", group: "Orbital", mpIndex: 263, hint: "Right eye outer corner" },
+    32→    32→  { id: "en_l", name: "Endocanthion L", group: "Orbital", mpIndex: 133, hint: "Left eye inner corner" },
+    33→    33→  { id: "en_r", name: "Endocanthion R", group: "Orbital", mpIndex: 362, hint: "Right eye inner corner" },
+    34→    34→  { id: "pu_l", name: "Pupil L", group: "Orbital", mpIndex: 468, hint: "Left pupil center" },
+    35→    35→  { id: "pu_r", name: "Pupil R", group: "Orbital", mpIndex: 473, hint: "Right pupil center" },
+    36→    36→  { id: "ps_l", name: "Palpebrale Sup. L", group: "Orbital", mpIndex: 159, hint: "Left upper lid" },
+    37→    37→  { id: "ps_r", name: "Palpebrale Sup. R", group: "Orbital", mpIndex: 386, hint: "Right upper lid" },
+    38→    38→  { id: "pi_l", name: "Palpebrale Inf. L", group: "Orbital", mpIndex: 145, hint: "Left lower lid" },
+    39→    39→  { id: "pi_r", name: "Palpebrale Inf. R", group: "Orbital", mpIndex: 374, hint: "Right lower lid" },
+    40→    40→
+    41→    41→  // Nasal
+    42→    42→  { id: "prn", name: "Pronasale", group: "Nasal", mpIndex: 4, hint: "Nose tip" },
+    43→    43→  { id: "sn", name: "Subnasale", group: "Nasal", mpIndex: 2, hint: "Columella base" },
+    44→    44→  { id: "c", name: "Columella", group: "Nasal", mpIndex: 1, hint: "Nasal spine" },
+    45→    45→  { id: "al_l", name: "Alare L", group: "Nasal", mpIndex: 129, hint: "Left nostril wing" },
+    46→    46→  { id: "al_r", name: "Alare R", group: "Nasal", mpIndex: 358, hint: "Right nostril wing" },
+    47→    47→  { id: "ac_l", name: "Alar Crease L", group: "Nasal", mpIndex: 98, hint: "Left alar crease" },
+    48→    48→  { id: "ac_r", name: "Alar Crease R", group: "Nasal", mpIndex: 327, hint: "Right alar crease" },
+    49→    49→  { id: "nt_l", name: "Nostril L", group: "Nasal", mpIndex: 49, hint: "Left nostril point" },
+    50→    50→  { id: "nt_r", name: "Nostril R", group: "Nasal", mpIndex: 279, hint: "Right nostril point" },
+    51→    51→
+    52→    52→  // Oral / Perioral
+    53→    53→  { id: "ch_l", name: "Cheilion L", group: "Oral", mpIndex: 61, hint: "Left mouth corner" },
+    54→    54→  { id: "ch_r", name: "Cheilion R", group: "Oral", mpIndex: 291, hint: "Right mouth corner" },
+    55→    55→  { id: "ls", name: "Labiale Superius", group: "Oral", mpIndex: 0, hint: "Upper lip border" },
+    56→    56→  { id: "li", name: "Labiale Inferius", group: "Oral", mpIndex: 17, hint: "Lower lip border" },
+    57→    57→  { id: "sto", name: "Stomion", group: "Oral", mpIndex: 13, hint: "Upper lip center" },
+    58→    58→  { id: "sto_l", name: "Stomion Lower", group: "Oral", mpIndex: 14, hint: "Lower lip center" },
+    59→    59→  { id: "cph_l", name: "Crista Philtri L", group: "Oral", mpIndex: 81, hint: "Left philtrum ridge" },
+    60→    60→  { id: "cph_r", name: "Crista Philtri R", group: "Oral", mpIndex: 311, hint: "Right philtrum ridge" },
+    61→    61→  { id: "cphi", name: "Philtrum Top", group: "Oral", mpIndex: 0, hint: "Philtrum peak" },
+    62→    62→  { id: "lsm", name: "Upper Lip Mid", group: "Oral", mpIndex: 13, hint: "Vermilion top" },
+    63→    63→
+    64→    64→  // Zygomatic / Midface
+    65→    65→  { id: "zy_l", name: "Zygion L", group: "Zygomatic", mpIndex: 234, hint: "Left cheekbone" },
+    66→    66→  { id: "zy_r", name: "Zygion R", group: "Zygomatic", mpIndex: 454, hint: "Right cheekbone" },
+    67→    67→  { id: "ck_l", name: "Cheek L", group: "Zygomatic", mpIndex: 116, hint: "Left malar" },
+    68→    68→  { id: "ck_r", name: "Cheek R", group: "Zygomatic", mpIndex: 345, hint: "Right malar" },
+    69→    69→
+    70→    70→  // Mandibular
+    71→    71→  { id: "pg", name: "Pogonion", group: "Mandibular", mpIndex: 18, hint: "Chin prominence" },
+    72→    72→  { id: "me", name: "Menton", group: "Mandibular", mpIndex: 152, hint: "Chin bottom" },
+    73→    73→  { id: "gn_l", name: "Gonion L", group: "Mandibular", mpIndex: 172, hint: "Left jaw angle" },
+    74→    74→  { id: "gn_r", name: "Gonion R", group: "Mandibular", mpIndex: 397, hint: "Right jaw angle" },
+    75→    75→  { id: "go_l", name: "Jaw L", group: "Mandibular", mpIndex: 136, hint: "Left mandible body" },
+    76→    76→  { id: "go_r", name: "Jaw R", group: "Mandibular", mpIndex: 365, hint: "Right mandible body" },
+    77→    77→  { id: "sl", name: "Sublabiale", group: "Mandibular", mpIndex: 17, hint: "Chin-lip sulcus" },
+    78→    78→  { id: "csl", name: "Chin Sulcus", group: "Mandibular", mpIndex: 175, hint: "Mentolabial sulcus" },
+    79→    79→];
+    80→    80→
+    81→    81→type Metric = {
+    82→    82→  id: string;
+    83→    83→  name: string;
+    84→    84→  category: string;
+    85→    85→  ideal: number;
+    86→    86→  tolerance: number;
+    87→    87→  unit: string;
+    88→    88→  description: string;
+    89→    89→  compute: (p: Record<string, Point>) => number | null;
+    90→    90→  draw: (ctx: CanvasRenderingContext2D, p: Record<string, Point>, w: number, h: number) => void;
+    91→    91→  nicer?: (v: number) => string;
+    92→    92→};
+    93→    93→
+    94→    94→const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+    95→    95→const mid = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    96→    96→
+    97→    97→const METRICS: Metric[] = [
+    98→    98→  {
+    99→    99→    id: "upper_third",
+   100→   100→    name: "Upper Third",
+   101→   101→    category: "Vertical Thirds",
+   102→   102→    ideal: 33.33,
+   103→   103→    tolerance: 7.5,
+   104→   104→    unit: "%",
+   105→   105→    description: "Trichion → Glabella / total facial height",
+   106→   106→    compute: (p) => {
+   107→   107→      if (!p.tr || !p.g || !p.sn || !p.me) return null;
+   108→   108→      const upper = dist(p.tr, p.g);
+   109→   109→      const total = dist(p.tr, p.me);
+   110→   110→      return (upper / total) * 100;
+   111→   111→    },
+   112→   112→    draw: (ctx, p) => {
+   113→   113→      if (!p.tr || !p.g) return;
+   114→   114→      ctx.strokeStyle = "#ff5569";
+   115→   115→      ctx.lineWidth = 2;
+   116→   116→      ctx.beginPath();
+   117→   117→      ctx.moveTo(p.tr.x - 44, p.tr.y);
+   118→   118→      ctx.lineTo(p.tr.x + 44, p.tr.y);
+   119→   119→      ctx.moveTo(p.g.x - 44, p.g.y);
+   120→   120→      ctx.lineTo(p.g.x + 44, p.g.y);
+   121→   121→      ctx.stroke();
+   122→   122→      ctx.strokeStyle = "#06c1e4";
+   123→   123→      ctx.beginPath();
+   124→   124→      ctx.moveTo(p.tr.x, p.tr.y);
+   125→   125→      ctx.lineTo(p.g.x, p.g.y);
+   126→   126→      ctx.stroke();
+   127→   127→    },
+   128→   128→  },
+   129→   129→  {
+   130→   130→    id: "middle_third",
+   131→   131→    name: "Middle Third",
+   132→   132→    category: "Vertical Thirds",
+   133→   133→    ideal: 33.33,
+   134→   134→    tolerance: 6.8,
+   135→   135→    unit: "%",
+   136→   136→    description: "Glabella → Subnasale",
+   137→   137→    compute: (p) => {
+   138→   138→      if (!p.g || !p.sn || !p.tr || !p.me) return null;
+   139→   139→      const midF = dist(p.g, p.sn);
+   140→   140→      const total = dist(p.tr, p.me);
+   141→   141→      return (midF / total) * 100;
+   142→   142→    },
+   143→   143→    draw: (ctx, p) => {
+   144→   144→      if (!p.g || !p.sn) return;
+   145→   145→      ctx.strokeStyle = "#ff9a3c";
+   146→   146→      ctx.lineWidth = 2;
+   147→   147→      for (const pt of [p.g, p.sn]) {
+   148→   148→        ctx.beginPath();
+   149→   149→        ctx.moveTo(pt.x - 44, pt.y);
+   150→   150→        ctx.lineTo(pt.x + 44, pt.y);
+   151→   151→        ctx.stroke();
+   152→   152→      }
+   153→   153→      ctx.strokeStyle = "#06c1e4";
+   154→   154→      ctx.beginPath();
+   155→   155→      ctx.moveTo(p.g.x, p.g.y);
+   156→   156→      ctx.lineTo(p.sn.x, p.sn.y);
+   157→   157→      ctx.stroke();
+   158→   158→    },
+   159→   159→  },
+   160→   160→  {
+   161→   161→    id: "lower_third",
+   162→   162→    name: "Lower Third",
+   163→   163→    category: "Vertical Thirds",
+   164→   164→    ideal: 33.33,
+   165→   165→    tolerance: 7.0,
+   166→   166→    unit: "%",
+   167→   167→    description: "Subnasale → Menton",
+   168→   168→    compute: (p) => {
+   169→   169→      if (!p.sn || !p.me || !p.tr) return null;
+   170→   170→      const lower = dist(p.sn, p.me);
+   171→   171→      const total = dist(p.tr, p.me);
+   172→   172→      return (lower / total) * 100;
+   173→   173→    },
+   174→   174→    draw: (ctx, p) => {
+   175→   175→      if (!p.sn || !p.me) return;
+   176→   176→      ctx.strokeStyle = "#ff4d80";
+   177→   177→      ctx.lineWidth = 2;
+   178→   178→      for (const pt of [p.sn, p.me]) {
+   179→   179→        ctx.beginPath();
+   180→   180→        ctx.moveTo(pt.x - 50, pt.y);
+   181→   181→        ctx.lineTo(pt.x + 50, pt.y);
+   182→   182→        ctx.stroke();
+   183→   183→      }
+   184→   184→      // double arrow
+   185→   185→      ctx.strokeStyle = "#06c1e4";
+   186→   186→      ctx.beginPath();
+   187→   187→      ctx.moveTo(p.sn.x, p.sn.y);
+   188→   188→      ctx.lineTo(p.me.x, p.me.y);
+   189→   189→      ctx.stroke();
+   190→   190→      [[p.sn, -8], [p.me, 8]].forEach(([pt, dir]: any) => {
+   191→   191→        ctx.beginPath();
+   192→   192→        ctx.moveTo(pt.x - 7, pt.y + dir);
+   193→   193→        ctx.lineTo(pt.x, pt.y);
+   194→   194→        ctx.lineTo(pt.x + 7, pt.y + dir);
+   195→   195→        ctx.stroke();
+   196→   196→      });
+   197→   197→    },
+   198→   198→  },
+   199→   199→  {
+   200→   200→    id: "facial_index",
+   201→   201→    name: "Facial Index",
+   202→   202→    category: "Proportions",
+   203→   203→    ideal: 88.5,
+   204→   204→    tolerance: 16,
+   205→   205→    unit: "",
+   206→   206→    description: "Face height / Bizygomatic width ×100",
+   207→   207→    compute: (p) => {
+   208→   208→      if(!p.tr || !p.me || !p.zy_l || !p.zy_r) return null;
+   209→   209→      const h = dist(p.tr, p.me);
+   210→   210→      const w = dist(p.zy_l, p.zy_r);
+   211→   211→      return (h / w) * 100;
+   212→   212→    },
+   213→   213→    draw: (ctx, p) => {
+   214→   214→      if (!p.zy_l || !p.zy_r || !p.tr || !p.me) return;
+   215→   215→      ctx.strokeStyle = "rgba(6,193,228,0.95)";
+   216→   216→      ctx.lineWidth = 2;
+   217→   217→      ctx.beginPath();
+   218→   218→      ctx.moveTo(p.zy_l.x, p.zy_l.y);
+   219→   219→      ctx.lineTo(p.zy_r.x, p.zy_r.y);
+   220→   220→      ctx.stroke();
+   221→   221→      const cx = (p.zy_l.x + p.zy_r.x) / 2;
+   222→   222→      ctx.beginPath();
+   223→   223→      ctx.moveTo(cx, p.tr.y);
+   224→   224→      ctx.lineTo(cx, p.me.y);
+   225→   225→      ctx.stroke();
+   226→   226→    },
+   227→   227→  },
+   228→   228→  {
+   229→   229→    id: "eye_separation",
+   230→   230→    name: "Eye Separation Ratio",
+   231→   231→    category: "Orbital",
+   232→   232→    ideal: 1.0,
+   233→   233→    tolerance: 0.23,
+   234→   234→    unit: "",
+   235→   235→    description: "Intercanthal distance / Palpebral fissure width",
+   236→   236→    compute: (p) => {
+   237→   237→      if (!p.en_l || !p.en_r || !p.ex_l || !p.en_l) return null;
+   238→   238→      const inter = dist(p.en_l, p.en_r);
+   239→   239→      const eyeW = dist(p.ex_l, p.en_l);
+   240→   240→      return inter / eyeW;
+   241→   241→    },
+   242→   242→    draw: (ctx, p) => {
+   243→   243→      if (!p.ex_l || !p.en_l || !p.en_r || !p.ex_r) return;
+   244→   244→      ctx.lineWidth = 2.2;
+   245→   245→      ctx.strokeStyle = "#06c1e4";
+   246→   246→      ctx.beginPath();
+   247→   247→      ctx.moveTo(p.ex_l.x, p.ex_l.y);
+   248→   248→      ctx.lineTo(p.en_l.x, p.en_l.y);
+   249→   249→      ctx.moveTo(p.en_r.x, p.en_r.y);
+   250→   250→      ctx.lineTo(p.ex_r.x, p.ex_r.y);
+   251→   251→      ctx.stroke();
+   252→   252→      ctx.strokeStyle = "#ff9a60";
+   253→   253→      ctx.beginPath();
+   254→   254→      ctx.moveTo(p.en_l.x, p.en_l.y);
+   255→   255→      ctx.lineTo(p.en_r.x, p.en_r.y);
+   256→   256→      ctx.stroke();
+   257→   257→    },
+   258→   258→  },
+   259→   259→  {
+   260→   260→    id: "interpupillary_ratio",
+   261→   261→    name: "IPD / Bizygomatic",
+   262→   262→    category: "Orbital",
+   263→   263→    ideal: 0.464,
+   264→   264→    tolerance: 0.065,
+   265→   265→    unit: "",
+   266→   266→    description: "Interpupillary distance relative to face width",
+   267→   267→    compute: (p) => {
+   268→   268→      if (!p.pu_l || !p.pu_r || !p.zy_l || !p.zy_r) return null;
+   269→   269→      return dist(p.pu_l, p.pu_r) / dist(p.zy_l, p.zy_r);
+   270→   270→    },
+   271→   271→    draw: (ctx, p) => {
+   272→   272→      if (!p.pu_l || !p.pu_r) return;
+   273→   273→      ctx.fillStyle = "#06c1e4";
+   274→   274→      [p.pu_l, p.pu_r].forEach(pt => {
+   275→   275→        ctx.beginPath(); ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2); ctx.fill();
+   276→   276→      });
+   277→   277→      ctx.strokeStyle = "#06c1e4";
+   278→   278→      ctx.lineWidth = 1.8;
+   279→   279→      ctx.beginPath();
+   280→   280→      ctx.moveTo(p.pu_l.x, p.pu_l.y);
+   281→   281→      ctx.lineTo(p.pu_r.x, p.pu_r.y);
+   282→   282→      ctx.stroke();
+   283→   283→    },
+   284→   284→  },
+   285→   285→  {
+   286→   286→    id: "canthal_tilt",
+   287→   287→    name: "Canthal Tilt",
+   288→   288→    category: "Orbital",
+   289→   289→    ideal: 5.8,
+   290→   290→    tolerance: 5.8,
+   291→   291→    unit: "°",
+   292→   292→    description: "Lateral canthus vs medial canthus inclination",
+   293→   293→    compute: (p) => {
+   294→   294→      if (!p.en_l || !p.ex_l || !p.en_r || !p.ex_r) return null;
+   295→   295→      const angleL = Math.atan2(p.ex_l.y - p.en_l.y, p.ex_l.x - p.en_l.x) * 180 / Math.PI;
+   296→   296→      const angleR = Math.atan2(p.en_r.y - p.ex_r.y, p.ex_r.x - p.en_r.x) * 180 / Math.PI;
+   297→   297→      return -(angleL + angleR) / 2;
+   298→   298→    },
+   299→   299→    draw: (ctx, p) => {
+   300→   300→      if (!p.en_l || !p.ex_l || !p.en_r || !p.ex_r) return;
+   301→   301→      ctx.strokeStyle = "#06c1e4";
+   302→   302→      ctx.lineWidth = 2;
+   303→   303→      ctx.beginPath();
+   304→   304→      ctx.moveTo(p.en_l.x, p.en_l.y); ctx.lineTo(p.ex_l.x, p.ex_l.y);
+   305→   305→      ctx.moveTo(p.en_r.x, p.en_r.y); ctx.lineTo(p.ex_r.x, p.ex_r.y);
+   306→   306→      ctx.stroke();
+   307→   307→    },
+   308→   308→  },
+   309→   309→  {
+   310→   310→    id: "nasal_index",
+   311→   311→    name: "Nasal Index",
+   312→   312→    category: "Nasal",
+   313→   313→    ideal: 0.69,
+   314→   314→    tolerance: 0.20,
+   315→   315→    unit: "",
+   316→   316→    description: "Alare width / Nose height (Nasion–Subnasale)",
+   317→   317→    compute: (p) => {
+   318→   318→      if (!p.al_l || !p.al_r || !p.n || !p.sn) return null;
+   319→   319→      return dist(p.al_l, p.al_r) / dist(p.n, p.sn);
+   320→   320→    },
+   321→   321→    draw: (ctx, p) => {
+   322→   322→      if (!p.al_l || !p.al_r || !p.n || !p.sn) return;
+   323→   323→      ctx.strokeStyle = "#06c1e4";
+   324→   324→      ctx.lineWidth = 2;
+   325→   325→      ctx.beginPath();
+   326→   326→      ctx.moveTo(p.al_l.x, p.al_l.y); ctx.lineTo(p.al_r.x, p.al_r.y);
+   327→   327→      ctx.stroke();
+   328→   328→      ctx.beginPath();
+   329→   329→      ctx.moveTo(p.n.x, p.n.y); ctx.lineTo(p.sn.x, p.sn.y);
+   330→   330→      ctx.stroke();
+   331→   331→    },
+   332→   332→  },
+   333→   333→  {
+   334→   334→    id: "mouth_width_ic",
+   335→   335→    name: "Mouth / Intercanthal",
+   336→   336→    category: "Oral",
+   337→   337→    ideal: 1.618,
+   338→   338→    tolerance: 0.42,
+   339→   339→    unit: "",
+   340→   340→    description: "Cheilion width / Intercanthal distance",
+   341→   341→    compute: (p) => {
+   342→   342→      if (!p.ch_l || !p.ch_r || !p.en_l || !p.en_r) return null;
+   343→   343→      return dist(p.ch_l, p.ch_r) / dist(p.en_l, p.en_r);
+   344→   344→    },
+   345→   345→    draw: (ctx, p) => {
+   346→   346→      if (!p.ch_l || !p.ch_r) return;
+   347→   347→      ctx.strokeStyle = "#06c1e4";
+   348→   348→      ctx.lineWidth = 2;
+   349→   349→      ctx.beginPath();
+   350→   350→      ctx.moveTo(p.ch_l.x, p.ch_l.y);
+   351→   351→      ctx.lineTo(p.ch_r.x, p.ch_r.y);
+   352→   352→      ctx.stroke();
+   353→   353→      [p.ch_l, p.ch_r].forEach(pt => {
+   354→   354→        ctx.fillStyle = "#06c1e4";
+   355→   355→        ctx.beginPath(); ctx.arc(pt.x, pt.y, 3, 0, Math.PI*2); ctx.fill();
+   356→   356→      });
+   357→   357→    },
+   358→   358→  },
+   359→   359→  {
+   360→   360→    id: "philtrum_chin",
+   361→   361→    name: "Philtrum : Chin",
+   362→   362→    category: "Oral",
+   363→   363→    ideal: 1.0,
+   364→   364→    tolerance: 0.48,
+   365→   365→    unit: "",
+   366→   366→    description: "Subnasale–Stomion / Stomion–Menton (normalized to 1:2 ideal)",
+   367→   367→    compute: (p) => {
+   368→   368→      if (!p.sn || !p.sto || !p.me) return null;
+   369→   369→      const upper = dist(p.sn, p.sto);
+   370→   370→      const lower = dist(p.sto, p.me);
+   371→   371→      const ratio = lower / upper;
+   372→   372→      return ratio / 2.0;
+   373→   373→    },
+   374→   374→    draw: (ctx, p) => {
+   375→   375→      if (!p.sn || !p.sto || !p.me) return;
+   376→   376→      ctx.strokeStyle = "#f59e33";
+   377→   377→      ctx.lineWidth = 1.8;
+   378→   378→      ctx.beginPath();
+   379→   379→      ctx.moveTo(p.sn.x, p.sn.y);
+   380→   380→      ctx.lineTo(p.sto.x, p.sto.y);
+   381→   381→      ctx.stroke();
+   382→   382→      ctx.strokeStyle = "#06c1e4";
+   383→   383→      ctx.beginPath();
+   384→   384→      ctx.moveTo(p.sto.x, p.sto.y);
+   385→   385→      ctx.lineTo(p.me.x, p.me.y);
+   386→   386→      ctx.stroke();
+   387→   387→    },
+   388→   388→  },
+   389→   389→  {
+   390→   390→    id: "jaw_zygo",
+   391→   391→    name: "Jaw / Zygoma",
+   392→   392→    category: "Mandibular",
+   393→   393→    ideal: 0.78,
+   394→   394→    tolerance: 0.13,
+   395→   395→    unit: "",
+   396→   396→    description: "Bigonial width / Bizygomatic width",
+   397→   397→    compute: (p) => {
+   398→   398→      if (!p.gn_l || !p.gn_r || !p.zy_l || !p.zy_r) return null;
+   399→   399→      return dist(p.gn_l, p.gn_r) / dist(p.zy_l, p.zy_r);
+   400→   400→    },
+   401→   401→    draw: (ctx, p) => {
+   402→   402→      if (!p.gn_l || !p.gn_r || !p.zy_l || !p.zy_r) return;
+   403→   403→      ctx.strokeStyle = "rgba(6,193,228,0.95)";
+   404→   404→      ctx.lineWidth = 2;
+   405→   405→      ctx.beginPath(); ctx.moveTo(p.zy_l.x, p.zy_l.y); ctx.lineTo(p.zy_r.x, p.zy_r.y); ctx.stroke();
+   406→   406→      ctx.strokeStyle = "#f49c45";
+   407→   407→      ctx.beginPath(); ctx.moveTo(p.gn_l.x, p.gn_l.y); ctx.lineTo(p.gn_r.x, p.gn_r.y); ctx.stroke();
+   408→   408→    },
+   409→   409→  },
+   410→   410→  {
+   411→   411→    id: "midface_ratio",
+   412→   412→    name: "Midface Ratio",
+   413→   413→    category: "Proportions",
+   414→   414→    ideal: 1.0,
+   415→   415→    tolerance: 0.28,
+   416→   416→    unit: "",
+   417→   417→    description: "IPD / Eye-Pupil to Lip vertical",
+   418→   418→    compute: (p) => {
+   419→   419→      if (!p.pu_l || !p.pu_r || !p.sto) return null;
+   420→   420→      const ipd = dist(p.pu_l, p.pu_r);
+   421→   421→      const eyeMid = mid(p.pu_l, p.pu_r);
+   422→   422→      const v = Math.abs(p.sto.y - eyeMid.y);
+   423→   423→      return ipd / v;
+   424→   424→    },
+   425→   425→    draw: (ctx, p) => {
+   426→   426→      if (!p.pu_l || !p.pu_r || !p.sto) return;
+   427→   427→      const eyeMid = mid(p.pu_l, p.pu_r);
+   428→   428→      ctx.strokeStyle = "#06c1e4";
+   429→   429→      ctx.lineWidth = 2;
+   430→   430→      ctx.beginPath();
+   431→   431→      ctx.moveTo(p.pu_l.x, p.pu_l.y); ctx.lineTo(p.pu_r.x, p.pu_r.y);
+   432→   432→      ctx.moveTo(eyeMid.x, eyeMid.y); ctx.lineTo(p.sto.x, p.sto.y);
+   433→   433→      ctx.stroke();
+   434→   434→    },
+   435→   435→  },
+   436→   436→  {
+   437→   437→    id: "nasolabial",
+   438→   438→    name: "Nasolabial Angle",
+   439→   439→    category: "Nasal",
+   440→   440→    ideal: 100,
+   441→   441→    tolerance: 20,
+   442→   442→    unit: "°",
+   443→   443→    description: "Columella–Subnasale–Labiale superius",
+   444→   444→    compute: (p) => {
+   445→   445→      if (!p.c || !p.sn || !p.ls) return null;
+   446→   446→      const a = { x: p.c.x - p.sn.x, y: p.c.y - p.sn.y };
+   447→   447→      const b = { x: p.ls.x - p.sn.x, y: p.ls.y - p.sn.y };
+   448→   448→      const dot = a.x * b.x + a.y * b.y;
+   449→   449→      const ma = Math.hypot(a.x, a.y);
+   450→   450→      const mb = Math.hypot(b.x, b.y);
+   451→   451→      const ang = Math.acos(Math.max(-1, Math.min(1, dot / (ma * mb)))) * 180 / Math.PI;
+   452→   452→      return ang;
+   453→   453→    },
+   454→   454→    draw: (ctx, p) => {
+   455→   455→      if (!p.c || !p.sn || !p.ls) return;
+   456→   456→      ctx.strokeStyle = "#06c1e4";
+   457→   457→      ctx.lineWidth = 2;
+   458→   458→      ctx.beginPath();
+   459→   459→      ctx.moveTo(p.c.x, p.c.y);
+   460→   460→      ctx.lineTo(p.sn.x, p.sn.y);
+   461→   461→      ctx.lineTo(p.ls.x, p.ls.y);
+   462→   462→      ctx.stroke();
+   463→   463→    },
+   464→   464→  },
+   465→   465→  {
+   466→   466→    id: "es_ratio",
+   467→   467→    name: "EME Angle",
+   468→   468→    category: "Proportions",
+   469→   469→    ideal: 50.4,
+   470→   470→    tolerance: 7.4,
+   471→   471→    unit: "°",
+   472→   472→    description: "Es–Nasion–Es (midface angular width)",
+   473→   473→    compute: (p) => {
+   474→   474→      if (!p.ex_l || !p.ex_r || !p.n) return null;
+   475→   475→      const a = { x: p.ex_l.x - p.n.x, y: p.ex_l.y - p.n.y };
+   476→   476→      const b = { x: p.ex_r.x - p.n.x, y: p.ex_r.y - p.n.y };
+   477→   477→      const dot = a.x * b.x + a.y * b.y;
+   478→   478→      const ma = Math.hypot(a.x, a.y);
+   479→   479→      const mb = Math.hypot(b.x, b.y);
+   480→   480→      return Math.acos(Math.max(-1, Math.min(1, dot / (ma * mb)))) * 180 / Math.PI;
+   481→   481→    },
+   482→   482→    draw: (ctx, p) => {
+   483→   483→      if (!p.ex_l || !p.ex_r || !p.n) return;
+   484→   484→      ctx.strokeStyle = "#06c1e4";
+   485→   485→      ctx.lineWidth = 1.7;
+   486→   486→      ctx.beginPath();
+   487→   487→      ctx.moveTo(p.ex_l.x, p.ex_l.y);
+   488→   488→      ctx.lineTo(p.n.x, p.n.y);
+   489→   489→      ctx.lineTo(p.ex_r.x, p.ex_r.y);
+   490→   490→      ctx.stroke();
+   491→   491→    },
+   492→   492→  },
+   493→   493→  {
+   494→   494→    id: "vermillion_ratio",
+   495→   495→    name: "Lip Ratio",
+   496→   496→    category: "Oral",
+   497→   497→    ideal: 1.618,
+   498→   498→    tolerance: 0.78,
+   499→   499→    unit: "",
+   500→   500→    description: "Lower lip thickness / Upper lip thickness (golden)",
+   501→   501→    compute: (p) => {
+   502→   502→      if (!p.ls || !p.sto || !p.sto_l || !p.li) return null;
+   503→   503→      const upper = dist(p.ls, p.sto);
+   504→   504→      const lower = dist(p.sto_l, p.li);
+   505→   505→      return lower / Math.max(upper, 0.001);
+   506→   506→    },
+   507→   507→    draw: (ctx, p) => {
+   508→   508→      if (!p.ls || !p.li || !p.sto) return;
+   509→   509→      ctx.strokeStyle = "#06c1e4";
+   510→   510→      ctx.lineWidth = 2;
+   511→   511→      ctx.beginPath();
+   512→   512→      ctx.moveTo(p.ls.x, p.ls.y);
+   513→   513→      ctx.lineTo(p.li.x, p.li.y);
+   514→   514→      ctx.stroke();
+   515→   515→    },
+   516→   516→  },
+   517→   517→];
+   518→   518→
+   519→   519→function scoreFrom(m: Metric, value: number) {
+   520→   520→  const deviation = Math.abs(value - m.ideal) / m.tolerance;
+   521→   521→  const s = Math.max(0, 1 - deviation);
+   522→   522→  return Math.round(s * 1000) / 100; // 0-10 scale with 2 decimals, e.g. 9.84
+   523→   523→}
+   524→   524→
+   525→   525→export default function App() {
+   526→   526→  const [stage, setStage] = useState<"upload" | "calibrate" | "report">("upload");
+   527→   527→  const [imgSrc, setImgSrc] = useState<string | null>(null);
+   528→   528→  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+   529→   529→  const [points, setPoints] = useState<Record<string, CalibratedPoint>>({});
+   530→   530→  const [currentIdx, setCurrentIdx] = useState(0);
+   531→   531→  const [faceLandmarker, setFaceLandmarker] = useState<any>(null);
+   532→   532→  const [loadingModel, setLoadingModel] = useState(false);
+   533→   533→  const [autoDetectMsg, setAutoDetectMsg] = useState("");
+   534→   534→
+   535→   535→  // Load MediaPipe
+   536→   536→  useEffect(() => {
+   537→   537→    let cancelled = false;
+   538→   538→    async function load() {
+   539→   539→      setLoadingModel(true);
+   540→   540→      try {
+   541→   541→        const vision = await import("@mediapipe/tasks-vision");
+   542→   542→        const { FaceLandmarker, FilesetResolver } = vision;
+   543→   543→        const filesetResolver = await FilesetResolver.forVisionTasks(
+   544→   544→          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm"
+   545→   545→        );
+   546→   546→        const landmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+   547→   547→          baseOptions: {
+   548→   548→            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+   549→   549→            delegate: "GPU"
+   550→   550→          },
+   551→   551→          runningMode: "IMAGE",
+   552→   552→          numFaces: 1,
+   553→   553→          outputFacialTransformationMatrixes: false,
+   554→   554→        });
+   555→   555→        if (!cancelled) setFaceLandmarker(landmarker);
+   556→   556→      } catch (e) {
+   557→   557→        console.error(e);
+   558→   558→      } finally {
+   559→   559→        setLoadingModel(false);
+   560→   560→      }
+   561→   561→    }
+   562→   562→    load();
+   563→   563→    return () => { cancelled = true; };
+   564→   564→  }, []);
+   565→   565→
+   566→   566→  const handleImageFile = useCallback((file: File) => {
+   567→   567→    const url = URL.createObjectURL(file);
+   568→   568→    const img = new Image();
+   569→   569→    img.onload = () => {
+   570→   570→      setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
+   571→   571→      setImgSrc(url);
+   572→   572→      setPoints({});
+   573→   573→      setCurrentIdx(0);
+   574→   574→      setStage("calibrate");
+   575→   575→      // run autodetection soon
+   576→   576→      setTimeout(() => runAutoDetect(url, img.naturalWidth, img.naturalHeight), 90);
+   577→   577→    };
+   578→   578→    img.src = url;
+   579→   579→  }, [faceLandmarker]);
+   580→   580→
+   581→   581→  const runAutoDetect = useCallback(async (url: string, w: number, h: number) => {
+   582→   582→    if (!faceLandmarker) {
+   583→   583→      setAutoDetectMsg("MediaPipe warming up — place points manually.");
+   584→   584→      const init: Record<string, CalibratedPoint> = {};
+   585→   585→      LANDMARKS.forEach(ld => {
+   586→   586→        init[ld.id] = { x: w * 0.5, y: h * 0.5, confirmed: false };
+   587→   587→      });
+   588→   588→      setPoints(init);
+   589→   589→      return;
+   590→   590→    }
+   591→   591→    try {
+   592→   592→      const imgEl = new Image();
+   593→   593→      imgEl.crossOrigin = "anonymous";
+   594→   594→      imgEl.src = url;
+   595→   595→      await new Promise(res => { imgEl.onload = res; });
+   596→   596→      const result = faceLandmarker.detect(imgEl);
+   597→   597→      const lm = result?.faceLandmarks?.[0];
+   598→   598→      const mapped: Record<string, CalibratedPoint> = {};
+   599→   599→      if (lm) {
+   600→   600→        LANDMARKS.forEach(def => {
+   601→   601→          const mp = lm[def.mpIndex];
+   602→   602→          if (mp) {
+   603→   603→            mapped[def.id] = {
+   604→   604→              x: mp.x * w,
+   605→   605→              y: mp.y * h,
+   606→   606→              confirmed: false,
+   607→   607→            };
+   608→   608→          } else {
+   609→   609→            mapped[def.id] = { x: w / 2, y: h / 2, confirmed: false };
+   610→   610→          }
+   611→   611→        });
+   612→   612→        setAutoDetectMsg("FaceMesh found 468 points → distilled to 50 anthropometric landmarks.");
+   613→   613→      } else {
+   614→   614→        LANDMARKS.forEach(def => {
+   615→   615→          mapped[def.id] = { x: w / 2, y: h / 2, confirmed: false };
+   616→   616→        });
+   617→   617→        setAutoDetectMsg("No face detected. Manual calibration needed.");
+   618→   618→      }
+   619→   619→      setPoints(mapped);
+   620→   620→    } catch (e) {
+   621→   621→      console.error(e);
+   622→   622→    }
+   623→   623→  }, [faceLandmarker]);
+   624→   624→
+   625→   625→  const confirmedCount = useMemo(() => Object.values(points).filter(p => p.confirmed).length, [points]);
+   626→   626→  const allConfirmed = confirmedCount >= LANDMARKS.length && LANDMARKS.length > 0;
+   627→   627→
+   628→   628→  const pointsForMetrics: Record<string, Point> = useMemo(() => {
+   629→   629→    const o: Record<string, Point> = {};
+   630→   630→    for (const [k, v] of Object.entries(points)) o[k] = { x: v.x, y: v.y };
+   631→   631→    return o;
+   632→   632→  }, [points]);
+   633→   633→
+   634→   634→  const metricResults = useMemo(() => {
+   635→   635→    return METRICS.map(m => {
+   636→   636→      const v = m.compute(pointsForMetrics);
+   637→   637→      if (v == null || isNaN(v)) return { metric: m, value: null as number | null, score: 0 };
+   638→   638→      return { metric: m, value: v, score: scoreFrom(m, v) };
+   639→   639→    });
+   640→   640→  }, [pointsForMetrics]);
+   641→   641→
+   642→   642→  const overallScore = useMemo(() => {
+   643→   643→    const vals = metricResults.filter(r => r.value !== null).map(r => r.score);
+   644→   644→    if (!vals.length) return 0;
+   645→   645→    return vals.reduce((a, b) => a + b, 0) / vals.length;
+   646→   646→  }, [metricResults]);
+   647→   647→
+   648→   648→  return (
+   649→   649→    <div className="min-h-screen bg-[#f5f5f7] text-zinc-900">
+   650→   650→      <header className="w-full border-b border-zinc-200/80 bg-white/80 backdrop-blur sticky top-0 z-40">
+   651→   651→        <div className="max-w-[1200px] mx-auto px-6 md:px-10 h-[64px] flex items-center justify-between">
+   652→   652→          <div className="flex items-center gap-9">
+   653→   653→            <div className="flex items-center gap-2.5">
+   654→   654→              <div className="w-8 h-8 rounded-[10px] bg-zinc-900 text-white text-[13px] font-semibold flex items-center justify-center">AF</div>
+   655→   655→              <div className="text-[16.5px] tracking-tight font-[600]">AnthroFace</div>
+   656→   656→              <span className="text-[11px] text-zinc-500 mt-[2px] ml-1">v2.1</span>
+   657→   657→            </div>
+   658→   658→            <nav className="hidden md:flex items-center gap-7 text-[13.5px] text-zinc-500">
+   659→   659→              <span className="text-zinc-900 font-medium">Calibrate</span>
+   660→   660→              <span>Analysis</span>
+   661→   661→              <span>Exports</span>
+   662→   662→              <span>Help</span>
+   663→   663→            </nav>
+   664→   664→          </div>
+   665→   665→          <div className="flex items-center gap-5 text-[12.5px]">
+   666→   666→            <span className="hidden sm:inline text-zinc-500">MediaPipe FaceMesh 468 → 50</span>
+   667→   667→            <button className="px-3 py-1.5 rounded-full border border-zinc-300 text-zinc-700 hover:bg-zinc-50">Sign in</button>
+   668→   668→          </div>
+   669→   669→        </div>
+   670→   670→      </header>
+   671→   671→
+   672→   672→      <main className="max-w-[1200px] mx-auto px-6 md:px-10 py-8 md:py-12">
+   673→   673→        <AnimatePresence mode="wait">
+   674→   674→          {stage === "upload" && (
+   675→   675→            <motion.div
+   676→   676→              key="upload"
+   677→   677→              initial={{ opacity: 0, y: 12 }}
+   678→   678→              animate={{ opacity: 1, y: 0 }}
+   679→   679→              exit={{ opacity: 0, y: -10 }}
+   680→   680→              transition={{ duration: 0.32 }}
+   681→   681→            >
+   682→   682→              <div className="max-w-3xl">
+   683→   683→                <div className="text-[13px] text-zinc-500 mb-2">Professional Facial Anthropometry</div>
+   684→   684→                <h1 className="text-[44px] md:text-[58px] leading-[0.98] tracking-[-0.028em] font-[620] text-zinc-900">
+   685→   685→                  Calibrate 50 landmarks.<br /> Get a clinical-grade<br /> proportion report.
+   686→   686→                </h1>
+   687→   687→                <p className="mt-5 text-[16.4px] text-zinc-600 leading-relaxed max-w-xl">
+   688→   688→                  MediaPipe Face Landmarker auto-detects 468 blendshape points. You refine 50 ISO anthropometric points in the precision Sniper UI, then export a hover-interactive ratio dashboard.
+   689→   689→                </p>
+   690→   690→              </div>
+   691→   691→
+   692→   692→              <div className="mt-10 bg-white rounded-[24px] shadow-[0_18px_80px_rgba(20,20,28,0.09)] ring-1 ring-zinc-200/90 p-7 md:p-12">
+   693→   693→                <UploadCard
+   694→   694→                  onFile={handleImageFile}
+   695→   695→                  loadingModel={loadingModel}
+   696→   696→                  setImgSrc={(src,w,h) => {
+   697→   697→                    setImgSrc(src);
+   698→   698→                    setImgSize({w,h});
+   699→   699→                    setStage("calibrate");
+   700→   700→                    runAutoDetect(src,w,h);
+   701→   701→                  }}
+   702→   702→                />
+   703→   703→                <div className="flex flex-wrap items-center gap-6 text-[12.5px] text-zinc-500 mt-7">
+   704→   704→                  <span>✔︎ 100% local — No upload</span>
+   705→   705→                  <span>✔︎ 468 → 50 distilled</span>
+   706→   706→                  <span>✔︎ Golden ratio & neoclassical canons</span>
+   707→   707→                  <span>✔︎ PNG / CSV export</span>
+   708→   708→                </div>
+   709→   709→              </div>
+   710→   710→              <div className="mt-8 grid md:grid-cols-3 gap-5 text-[13.4px] text-zinc-600">
+   711→   711→                {[
+   712→   712→                  ["Sniper Calibrator", "Center-locked crosshair, 4× magnifier, sub-pixel nudging."],
+   713→   713→                  ["Hover-Draw Report", "Metric hover instantly draws vectors on the calibrated photo."],
+   714→   714→                  ["19 Clinical Ratios", "Vertical thirds, canthal tilt, nasolabial, IPD, EME, lip golden ratio."],
+   715→   715→                ].map(([t,d]) => (
+   716→   716→                  <div key={t} className="bg-white/70 rounded-2xl border border-zinc-200 px-5 py-4">
+   717→   717→                    <div className="font-[600] text-zinc-800">{t}</div>
+   718→   718→                    <div className="mt-1 text-zinc-500">{d}</div>
+   719→   719→                  </div>
+   720→   720→                ))}
+   721→   721→              </div>
+   722→   722→            </motion.div>
+   723→   723→          )}
+   724→   724→
+   725→   725→          {stage === "calibrate" && imgSrc && (
+   726→   726→            <motion.div
+   727→   727→              key="calibrate"
+   728→   728→              initial={{ opacity: 0, y: 10 }}
+   729→   729→              animate={{ opacity: 1, y: 0 }}
+   730→   730→              exit={{ opacity: 0 }}
+   731→   731→              className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-8 items-start"
+   732→   732→            >
+   733→   733→              <CalibrationSidebar
+   734→   734→                points={points}
+   735→   735→                currentIdx={currentIdx}
+   736→   736→                setCurrentIdx={setCurrentIdx}
+   737→   737→                confirmedCount={confirmedCount}
+   738→   738→                total={LANDMARKS.length}
+   739→   739→                onFinish={() => setStage("report")}
+   740→   740→                allConfirmed={allConfirmed}
+   741→   741→                autoDetectMsg={autoDetectMsg}
+   742→   742→              />
+   743→   743→              <SniperCalibrator
+   744→   744→                imgSrc={imgSrc}
+   745→   745→                imgW={imgSize.w}
+   746→   746→                imgH={imgSize.h}
+   747→   747→                landmark={LANDMARKS[currentIdx]}
+   748→   748→                point={points[LANDMARKS[currentIdx]?.id]}
+   749→   749→                onConfirm={(pt) => {
+   750→   750→                  const id = LANDMARKS[currentIdx].id;
+   751→   751→                  setPoints(prev => ({ ...prev, [id]: { ...pt, confirmed: true } }));
+   752→   752→                  if (currentIdx < LANDMARKS.length - 1) {
+   753→   753→                    setCurrentIdx(i => i + 1);
+   754→   754→                  } else {
+   755→   755→                    setStage("report");
+   756→   756→                  }
+   757→   757→                }}
+   758→   758→                goPrev={() => setCurrentIdx(i => Math.max(0, i - 1))}
+   759→   759→                goNext={() => setCurrentIdx(i => Math.min(LANDMARKS.length - 1, i + 1))}
+   760→   760→                progressLabel={`${currentIdx + 1} / ${LANDMARKS.length}`}
+   761→   761→                isConfirmed={points[LANDMARKS[currentIdx]?.id]?.confirmed ?? false}
+   762→   762→                onSetPoint={(pt) => {
+   763→   763→                  const id = LANDMARKS[currentIdx]?.id;
+   764→   764→                  if (!id) return;
+   765→   765→                  setPoints(prev => ({ ...prev, [id]: { ...pt, confirmed: prev[id]?.confirmed ?? false } }));
+   766→   766→                }}
+   767→   767→              />
+   768→   768→            </motion.div>
+   769→   769→          )}
+   770→   770→
+   771→   771→          {stage === "report" && imgSrc && (
+   772→   772→            <motion.div
+   773→   773→              key="report"
+   774→   774→              initial={{ opacity: 0, y: 10 }}
+   775→   775→              animate={{ opacity: 1, y: 0 }}
+   776→   776→              exit={{ opacity: 0 }}
+   777→   777→            >
+   778→   778→              <ReportView
+   779→   779→                imgSrc={imgSrc}
+   780→   780→                imgW={imgSize.w}
+   781→   781→                imgH={imgSize.h}
+   782→   782→                points={pointsForMetrics}
+   783→   783→                metricResults={metricResults}
+   784→   784→                overallScore={overallScore}
+   785→   785→                onBack={() => setStage("calibrate")}
+   786→   786→                onReupload={() => setStage("upload")}
+   787→   787→              />
+   788→   788→            </motion.div>
+   789→   789→          )}
+   790→   790→        </AnimatePresence>
+   791→   791→      </main>
+   792→   792→
+   793→   793→      <footer className="max-w-[1200px] mx-auto px-6 md:px-10 py-12 text-[12.5px] text-zinc-500">
+   794→   794→        AnthroFace • For educational / clinical visualization only • FaceMesh 468-pt model © Google MediaPipe Apache-2.0
+   795→   795→      </footer>
+   796→   796→    </div>
+   797→   797→  );
+   798→   798→}
+   799→   799→
+   800→   800→function UploadCard({ onFile, loadingModel, setImgSrc } : {
+   801→   801→  onFile: (f: File) => void;
+   802→   802→  loadingModel: boolean;
+   803→   803→  setImgSrc: (src:string,w:number,h:number)=>void;
+   804→   804→}) {
+   805→   805→  const inputRef = useRef<HTMLInputElement>(null);
+   806→   806→  const [drag, setDrag] = useState(false);
+   807→   807→
+   808→   808→  const useDemo = () => {
+   809→   809→    const img = new Image();
+   810→   810→    img.crossOrigin = "anonymous";
+   811→   811→    img.onload = () => {
+   812→   812→      const canvas = document.createElement("canvas");
+   813→   813→      canvas.width = img.naturalWidth;
+   814→   814→      canvas.height = img.naturalHeight;
+   815→   815→      const ctx = canvas.getContext("2d")!;
+   816→   816→      ctx.drawImage(img, 0, 0);
+   817→   817→      const src = canvas.toDataURL("image/jpeg", 0.92);
+   818→   818→      setImgSrc(src, img.naturalWidth, img.naturalHeight);
+   819→   819→    };
+   820→   820→    img.src = "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?q=80&w=1200&auto=format&fit=crop";
+   821→   821→  };
+   822→   822→
+   823→   823→  return (
+   824→   824→    <div>
+   825→   825→      <div
+   826→   826→        onDragOver={e => { e.preventDefault(); setDrag(true); }}
+   827→   827→        onDragLeave={() => setDrag(false)}
+   828→   828→        onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) onFile(f); }}
+   829→   829→        className={`rounded-[18px] border-[1.8px] border-dashed transition-all px-6 py-14 text-center ${drag ? "border-cyan-400 bg-cyan-50/60" : "border-zinc-300 bg-[#fbfbfc]"}`}
+   830→   830→      >
+   831→   831→        <div className="mx-auto w-12 h-12 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-500 mb-4">
+   832→   832→          <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7" viewBox="0 0 24 24"><path d="M12 16V4M8 8l4-4 4 4"/><rect x="3" y="14" width="18" height="7" rx="2"/></svg>
+   833→   833→        </div>
+   834→   834→        <div className="text-[17.5px] font-[580] text-zinc-800">Drop a frontal portrait, or browse</div>
+   835→   835→        <div className="text-[13.4px] text-zinc-500 mt-1">JPG / PNG • 800px+ • neutral expression • good lighting</div>
+   836→   836→        <div className="mt-5 flex items-center justify-center gap-3">
+   837→   837→          <button onClick={() => inputRef.current?.click()} className="px-4 py-2 rounded-full bg-zinc-900 text-white text-[13.4px] font-medium hover:bg-zinc-800">Choose photo</button>
+   838→   838→          <button onClick={useDemo} className="px-4 py-2 rounded-full border border-zinc-300 text-zinc-700 text-[13.4px] hover:bg-zinc-50">Use demo face</button>
+   839→   839→        </div>
+   840→   840→        <input ref={inputRef} type="file" accept="image/*" hidden onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+   841→   841→        <div className="mt-3 text-[11.7px] text-zinc-500">{loadingModel ? "Loading Face Landmarker…" : "MediaPipe ready • runs in-browser"}</div>
+   842→   842→      </div>
+   843→   843→    </div>
+   844→   844→  );
+   845→   845→}
+   846→   846→
+   847→   847→function CalibrationSidebar({ points, currentIdx, setCurrentIdx, confirmedCount, total, onFinish, allConfirmed, autoDetectMsg }: any) {
+   848→   848→  const groups = useMemo(() => {
+   849→   849→    const m = new Map<string, typeof LANDMARKS>();
+   850→   850→    LANDMARKS.forEach((l, i) => {
+   851→   851→      if (!m.has(l.group)) m.set(l.group, []);
+   852→   852→      m.get(l.group)!.push({ ...l, _i: i } as any);
+   853→   853→    });
+   854→   854→    return Array.from(m.entries());
+   855→   855→  }, []);
+   856→   856→
+   857→   857→  return (
+   858→   858→    <div className="lg:sticky lg:top-[82px]">
+   859→   859→      <div className="bg-white rounded-[22px] shadow-[0_12px_50px_rgba(23,23,27,0.08)] ring-1 ring-zinc-200">
+   860→   860→        <div className="px-5 pt-5 pb-4 border-b border-zinc-100">
+   861→   861→          <div className="text-[12.2px] text-zinc-500">Calibration</div>
+   862→   862→          <div className="text-[20px] font-[650] tracking-tight mt-1">Refine landmarks</div>
+   863→   863→          <div className="mt-3">
+   864→   864→            <div className="flex justify-between text-[11.6px] text-zinc-500 mb-1">
+   865→   865→              <span>{confirmedCount} / {total} confirmed</span>
+   866→   866→              <span>{Math.round(confirmedCount/total*100)}%</span>
+   867→   867→            </div>
+   868→   868→            <div className="h-[7px] bg-zinc-100 rounded-full overflow-hidden">
+   869→   869→              <div className="h-full bg-zinc-900 rounded-full transition-all" style={{ width: `${confirmedCount/total*100}%` }} />
+   870→   870→            </div>
+   871→   871→          </div>
+   872→   872→          {autoDetectMsg && <div className="mt-3 text-[11.8px] text-zinc-600 bg-zinc-50 rounded-xl px-3 py-2 border border-zinc-100">{autoDetectMsg}</div>}
+   873→   873→        </div>
+   874→   874→
+   875→   875→        <div className="px-3 py-3 max-h-[560px] overflow-auto">
+   876→   876→          {groups.map(([group, items]: any) => (
+   877→   877→            <div key={group} className="mb-3">
+   878→   878→              <div className="px-2 py-1.5 text-[11px] uppercase tracking-wider text-zinc-400 font-medium">{group}</div>
+   879→   879→              <div className="space-y-1">
+   880→   880→                {items.map((l: any) => {
+   881→   881→                  const p = points[l.id];
+   882→   882→                  const active = l._i === currentIdx;
+   883→   883→                  return (
+   884→   884→                    <button key={l.id}
+   885→   885→                      onClick={() => setCurrentIdx(l._i)}
+   886→   886→                      className={`w-full text-left px-3 py-[9px] rounded-xl text-[13.4px] transition flex items-center justify-between ${
+   887→   887→                        active ? "bg-zinc-900 text-white" : "hover:bg-zinc-100 text-zinc-700"
+   888→   888→                      }`}
+   889→   889→                    >
+   890→   890→                      <span className="truncate">{l._i + 1}. {l.name}</span>
+   891→   891→                      <span className={`text-[11px] ${active ? "text-zinc-300" : "text-zinc-400"}`}>{p?.confirmed ? "✓" : "○"}</span>
+   892→   892→                    </button>
+   893→   893→                  );
+   894→   894→                })}
+   895→   895→              </div>
+   896→   896→            </div>
+   897→   897→          ))}
+   898→   898→        </div>
+   899→   899→
+   900→   900→        <div className="px-5 py-4 border-t border-zinc-100 flex items-center justify-between">
+   901→   901→          <div className="text-[11.8px] text-zinc-500">Nudge: arrow keys • Zoom: scroll</div>
+   902→   902→          <button onClick={onFinish} disabled={!allConfirmed && confirmedCount < 14}
+   903→   903→            className="px-3.5 py-2 rounded-full text-[13px] font-medium bg-zinc-900 text-white disabled:opacity-35 disabled:cursor-not-allowed hover:bg-zinc-800">
+   904→   904→            {allConfirmed ? "View Report →" : "Skip to report"}
+   905→   905→          </button>
+   906→   906→        </div>
+   907→   907→      </div>
+   908→   908→    </div>
+   909→   909→  );
+   910→   910→}
+   911→   911→
+   912→   912→function SniperCalibrator({ imgSrc, imgW, imgH, landmark, point, onConfirm, goPrev, goNext, progressLabel, isConfirmed, onSetPoint }: {
+   913→   913→  imgSrc: string;
+   914→   914→  imgW: number;
+   915→   915→  imgH: number;
+   916→   916→  landmark: LandmarkDef | undefined;
+   917→   917→  point: CalibratedPoint | undefined;
+   918→   918→  onConfirm: (pt: Point) => void;
+   919→   919→  goPrev: () => void;
+   920→   920→  goNext: () => void;
+   921→   921→  progressLabel: string;
+   922→   922→  isConfirmed: boolean;
+   923→   923→  onSetPoint: (pt: Point) => void;
+   924→   924→}) {
+   925→   925→  const viewportRef = useRef<HTMLDivElement>(null);
+   926→   926→  const [zoom, setZoom] = useState(2.35);
+   927→   927→  const [pan, setPan] = useState({ x: 0, y: 0 });
+   928→   928→  const [dragging, setDragging] = useState(false);
+   929→   929→  const dragRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+   930→   930→
+   931→   931→  // When landmark changes, fly to it
+   932→   932→  useEffect(() => {
+   933→   933→    if (!point) return;
+   934→   934→    // center the landmark under the crosshair
+   935→   935→    const targetPanX = -(point.x - imgW / 2) * zoom;
+   936→   936→    const targetPanY = -(point.y - imgH / 2) * zoom;
+   937→   937→    // smooth snap
+   938→   938→    setPan({ x: targetPanX, y: targetPanY });
+   939→   939→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   940→   940→  }, [landmark?.id]);
+   941→   941→
+   942→   942→  // Keep pan updated when zoom changes: keep crosshair world stable
+   943→   943→  const setZoomKeepCenter = (nz: number) => {
+   944→   944→    const ratio = nz / zoom;
+   945→   945→    setPan(p => ({ x: p.x * ratio, y: p.y * ratio }));
+   946→   946→    setZoom(nz);
+   947→   947→  };
+   948→   948→
+   949→   949→  const crossWorld = useMemo(() => {
+   950→   950→    // image coordinate under crosshair
+   951→   951→    return {
+   952→   952→      x: imgW / 2 + (-pan.x) / zoom,
+   953→   953→      y: imgH / 2 + (-pan.y) / zoom,
+   954→   954→    };
+   955→   955→  }, [pan, zoom, imgW, imgH]);
+   956→   956→
+   957→   957→  // update the live point as user pans (for magnifier accuracy)
+   958→   958→  useEffect(() => {
+   959→   959→    if (!point) return;
+   960→   960→    onSetPoint(crossWorld);
+   961→   961→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   962→   962→  }, [crossWorld.x, crossWorld.y]);
+   963→   963→
+   964→   964→  const onWheel = (e: React.WheelEvent) => {
+   965→   965→    e.preventDefault();
+   966→   966→    const delta = -e.deltaY;
+   967→   967→    const factor = delta > 0 ? 1.12 : 0.89;
+   968→   968→    const nz = Math.min(6.5, Math.max(0.7, zoom * factor));
+   969→   969→    setZoomKeepCenter(nz);
+   970→   970→  };
+   971→   971→
+   972→   972→  const onPointerDown = (e: React.PointerEvent) => {
+   973→   973→    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+   974→   974→    setDragging(true);
+   975→   975→    dragRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+   976→   976→  };
+   977→   977→  const onPointerMove = (e: React.PointerEvent) => {
+   978→   978→    if (!dragging) return;
+   979→   979→    const dx = e.clientX - dragRef.current.x;
+   980→   980→    const dy = e.clientY - dragRef.current.y;
+   981→   981→    setPan({ x: dragRef.current.panX + dx, y: dragRef.current.panY + dy });
+   982→   982→  };
+   983→   983→  const onPointerUp = () => setDragging(false);
+   984→   984→
+   985→   985→  // keyboard nudging - move the image under the crosshair for sub-pixel precision
+   986→   986→  useEffect(() => {
+   987→   987→    const h = (e: KeyboardEvent) => {
+   988→   988→      const step = e.shiftKey ? 0.45 : 1.65;
+   989→   989→      let dx = 0, dy = 0;
+   990→   990→      if (e.key === "ArrowLeft") { dx = -step; e.preventDefault(); }
+   991→   991→      if (e.key === "ArrowRight") { dx = step; e.preventDefault(); }
+   992→   992→      if (e.key === "ArrowUp") { dy = -step; e.preventDefault(); }
+   993→   993→      if (e.key === "ArrowDown") { dy = step; e.preventDefault(); }
+   994→   994→      if (dx !== 0 || dy !== 0) {
+   995→   995→        // move image opposite so the point under crosshair moves with arrow direction
+   996→   996→        setPan(p => ({ x: p.x - dx * zoom, y: p.y - dy * zoom }));
+   997→   997→      }
+   998→   998→      if (e.key === "Enter") { if (point) onConfirm({ x: crossWorld.x, y: crossWorld.y }); }
+   999→   999→    };
+  1000→  1000→    window.addEventListener("keydown", h);
+  1001→  1001→    return () => window.removeEventListener("keydown", h);
+  1002→  1002→  }, [zoom, onConfirm, point, crossWorld]);
+  1003→  1003→
+  1004→  1004→  // Magnifier canvas
+  1005→  1005→  const magRef = useRef<HTMLCanvasElement>(null);
+  1006→  1006→  const imgRef = useRef<HTMLImageElement>(null);
+  1007→  1007→
+  1008→  1008→  useEffect(() => {
+  1009→  1009→    const canvas = magRef.current;
+  1010→  1010→    const img = imgRef.current;
+  1011→  1011→    if (!canvas || !img || !img.complete) return;
+  1012→  1012→    const ctx = canvas.getContext("2d");
+  1013→  1013→    if (!ctx) return;
+  1014→  1014→    const size = 168;
+  1015→  1015→    canvas.width = size;
+  1016→  1016→    canvas.height = size;
+  1017→  1017→    ctx.imageSmoothingEnabled = false;
+  1018→  1018→    const srcSize = 72 / zoom; // world size visible
+  1019→  1019→    const sx = Math.max(0, Math.min(imgW - srcSize, crossWorld.x - srcSize / 2));
+  1020→  1020→    const sy = Math.max(0, Math.min(imgH - srcSize, crossWorld.y - srcSize / 2));
+  1021→  1021→    ctx.clearRect(0, 0, size, size);
+  1022→  1022→    ctx.drawImage(img, sx, sy, srcSize, srcSize, 0, 0, size, size);
+  1023→  1023→    // crosshair
+  1024→  1024→    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  1025→  1025→    ctx.lineWidth = 1;
+  1026→  1026→    ctx.beginPath();
+  1027→  1027→    ctx.moveTo(size / 2, 8); ctx.lineTo(size / 2, size - 8);
+  1028→  1028→    ctx.moveTo(8, size / 2); ctx.lineTo(size - 8, size / 2);
+  1029→  1029→    ctx.stroke();
+  1030→  1030→    ctx.strokeStyle = "#06c1e4";
+  1031→  1031→    ctx.beginPath();
+  1032→  1032→    ctx.arc(size / 2, size / 2, 3.2, 0, Math.PI * 2);
+  1033→  1033→    ctx.stroke();
+  1034→  1034→  }, [crossWorld, imgW, imgH, zoom, imgSrc]);
+  1035→  1035→
+  1036→  1036→  if (!landmark) return null;
+  1037→  1037→
+  1038→  1038→  return (
+  1039→  1039→    <div className="bg-white rounded-[24px] shadow-[0_14px_60px_rgba(15,15,20,0.10)] ring-1 ring-zinc-200 overflow-hidden">
+  1040→  1040→      <div className="px-5 sm:px-7 pt-5 pb-4 border-b border-zinc-100 flex flex-wrap items-start justify-between gap-3">
+  1041→  1041→        <div>
+  1042→  1042→          <div className="text-[11.7px] text-zinc-500">Align to crosshair • {progressLabel}</div>
+  1043→  1043→          <div className="text-[24px] font-[650] tracking-tight">{landmark.name}</div>
+  1044→  1044→          <div className="text-[13.3px] text-zinc-500">{landmark.hint}</div>
+  1045→  1045→        </div>
+  1046→  1046→        <div className="flex items-center gap-2">
+  1047→  1047→          <button onClick={goPrev} className="px-3 py-1.5 rounded-full border border-zinc-300 text-[12.8px] text-zinc-700 hover:bg-zinc-50">Prev</button>
+  1048→  1048→          <button onClick={goNext} className="px-3 py-1.5 rounded-full border border-zinc-300 text-[12.8px] text-zinc-700 hover:bg-zinc-50">Next</button>
+  1049→  1049→          <button
+  1050→  1050→            onClick={() => onConfirm({ x: crossWorld.x, y: crossWorld.y })}
+  1051→  1051→            className={`px-4 py-1.5 rounded-full text-[13px] font-medium text-white ${isConfirmed ? "bg-emerald-600 hover:bg-emerald-600/90" : "bg-zinc-900 hover:bg-zinc-800"}`}
+  1052→  1052→          >
+  1053→  1053→            {isConfirmed ? "Confirmed ✓" : "Confirm / Next"}
+  1054→  1054→          </button>
+  1055→  1055→        </div>
+  1056→  1056→      </div>
+  1057→  1057→
+  1058→  1058→      <div className="relative">
+  1059→  1059→        <div
+  1060→  1060→          ref={viewportRef}
+  1061→  1061→          onWheel={onWheel}
+  1062→  1062→          onPointerDown={onPointerDown}
+  1063→  1063→          onPointerMove={onPointerMove}
+  1064→  1064→          onPointerUp={onPointerUp}
+  1065→  1065→          className="relative w-full h-[600px] md:h-[660px] bg-[#eef0f3] overflow-hidden touch-none select-none cursor-grab active:cursor-grabbing"
+  1066→  1066→        >
+  1067→  1067→          {/* The image, panned */}
+  1068→  1068→          <img
+  1069→  1069→            ref={imgRef}
+  1070→  1070→            src={imgSrc}
+  1071→  1071→            alt=""
+  1072→  1072→            draggable={false}
+  1073→  1073→            className="absolute left-1/2 top-1/2 max-w-none pointer-events-none"
+  1074→  1074→            style={{
+  1075→  1075→              width: imgW,
+  1076→  1076→              height: imgH,
+  1077→  1077→              transform: `translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px)) scale(${zoom})`,
+  1078→  1078→              transformOrigin: "center center",
+  1079→  1079→            }}
+  1080→  1080→          />
+  1081→  1081→
+  1082→  1082→          {/* Crosshair center */}
+  1083→  1083→          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+  1084→  1084→            {/* Outer rings */}
+  1085→  1085→            <div className="w-[66px] h-[66px] rounded-full border border-zinc-900/16"></div>
+  1086→  1086→            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[32px] h-[32px] rounded-full border border-zinc-900/24"></div>
+  1087→  1087→            {/* cross lines */}
+  1088→  1088→            <div className="absolute left-1/2 top-1/2 w-[150px] h-px bg-zinc-900/55 -translate-x-1/2 -translate-y-1/2"></div>
+  1089→  1089→            <div className="absolute left-1/2 top-1/2 w-px h-[150px] bg-zinc-900/55 -translate-x-1/2 -translate-y-1/2"></div>
+  1090→  1090→            {/* center dot */}
+  1091→  1091→            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[7px] h-[7px] rounded-full bg-[#06c1e4] ring-4 ring-[#06c1e4]/20"></div>
+  1092→  1092→          </div>
+  1093→  1093→
+  1094→  1094→          {/* Zoom / magnifier */}
+  1095→  1095→          <div className="absolute right-4 top-4 bg-white/95 rounded-[18px] shadow-xl ring-1 ring-zinc-200 p-[11px]">
+  1096→  1096→            <div className="text-[10.7px] text-zinc-500 mb-1.5 font-mono">4× MAGNIFIER • {zoom.toFixed(2)}×</div>
+  1097→  1097→            <canvas ref={magRef} className="rounded-[11px] bg-zinc-200 block w-[168px] h-[168px]" />
+  1098→  1098→            <div className="mt-1.5 text-[10.8px] text-zinc-500 font-mono">x:{crossWorld.x.toFixed(1)} y:{crossWorld.y.toFixed(1)}</div>
+  1099→  1099→          </div>
+  1100→  1100→
+  1101→  1101→          {/* bottom helper */}
+  1102→  1102→          <div className="absolute left-4 bottom-4 text-[11.6px] text-zinc-600 bg-white/90 rounded-full px-3 py-1.5 shadow ring-1 ring-zinc-200">
+  1103→  1103→            Drag to pan • Scroll to zoom • Arrows nudge • Enter confirm
+  1104→  1104→          </div>
+  1105→  1105→        </div>
+  1106→  1106→      </div>
+  1107→  1107→    </div>
+  1108→  1108→  );
+  1109→  1109→}
+  1110→  1110→
+  1111→  1111→// --- Report View ---
+  1112→  1112→
+  1113→  1113→function ReportView({ imgSrc, imgW, imgH, points, metricResults, overallScore, onBack, onReupload }: any) {
+  1114→  1114→  const [hoverMetric, setHoverMetric] = useState<string | null>(null);
+  1115→  1115→  const canvasRef = useRef<HTMLCanvasElement>(null);
+  1116→  1116→  const imgElRef = useRef<HTMLImageElement>(null);
+  1117→  1117→  const [imgDisplay, setImgDisplay] = useState({ w: 520, h: 650 });
+  1118→  1118→
+  1119→  1119→  // Fit image for display
+  1120→  1120→  const fit = useMemo(() => {
+  1121→  1121→    const maxW = 560;
+  1122→  1122→    const scale = Math.min(1, maxW / imgW);
+  1123→  1123→    return { w: imgW * scale, h: imgH * scale, scale };
+  1124→  1124→  }, [imgW, imgH]);
+  1125→  1125→
+  1126→  1126→  useEffect(() => { setImgDisplay({ w: fit.w, h: fit.h }); }, [fit]);
+  1127→  1127→
+  1128→  1128→  // draw overlay
+  1129→  1129→  useEffect(() => {
+  1130→  1130→    const canvas = canvasRef.current;
+  1131→  1131→    if (!canvas) return;
+  1132→  1132→    const ctx = canvas.getContext("2d");
+  1133→  1133→    if (!ctx) return;
+  1134→  1134→    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  1135→  1135→    // draw all points faint
+  1136→  1136→    ctx.fillStyle = "rgba(255,255,255,0.92)";
+  1137→  1137→    Object.values(points).forEach((p: any) => {
+  1138→  1138→      ctx.beginPath();
+  1139→  1139→      ctx.arc(p.x * fit.scale, p.y * fit.scale, 2.15, 0, Math.PI * 2);
+  1140→  1140→      ctx.fill();
+  1141→  1141→    });
+  1142→  1142→
+  1143→  1143→    if (hoverMetric) {
+  1144→  1144→      const mr = metricResults.find((r: any) => r.metric.id === hoverMetric);
+  1145→  1145→      if (mr) {
+  1146→  1146→        ctx.save();
+  1147→  1147→        ctx.scale(fit.scale, fit.scale);
+  1148→  1148→        mr.metric.draw(ctx, points, imgW, imgH);
+  1149→  1149→        ctx.restore();
+  1150→  1150→      }
+  1151→  1151→    }
+  1152→  1152→  }, [hoverMetric, points, fit.scale, imgW, imgH, metricResults]);
+  1153→  1153→
+  1154→  1154→  const grouped = useMemo(() => {
+  1155→  1155→    const g: Record<string, typeof metricResults> = {};
+  1156→  1156→    metricResults.forEach((r: any) => {
+  1157→  1157→      const cat = r.metric.category;
+  1158→  1158→      if (!g[cat]) g[cat] = [];
+  1159→  1159→      g[cat].push(r);
+  1160→  1160→    });
+  1161→  1161→    return g;
+  1162→  1162→  }, [metricResults]);
+  1163→  1163→
+  1164→  1164→  return (
+  1165→  1165→    <div>
+  1166→  1166→      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+  1167→  1167→        <div>
+  1168→  1168→          <div className="text-[12.5px] text-zinc-500">Analysis Report</div>
+  1169→  1169→          <h2 className="text-[34px] tracking-tight font-[660]">Facial Proportions</h2>
+  1170→  1170→        </div>
+  1171→  1171→        <div className="flex items-center gap-3 text-[12.8px]">
+  1172→  1172→          <button onClick={onBack} className="px-3.5 py-1.5 rounded-full border border-zinc-300 text-zinc-700 hover:bg-zinc-50">← Back to calibrate</button>
+  1173→  1173→          <button onClick={onReupload} className="px-3.5 py-1.5 rounded-full bg-zinc-900 text-white hover:bg-zinc-800">New photo</button>
+  1174→  1174→        </div>
+  1175→  1175→      </div>
+  1176→  1176→
+  1177→  1177→      <div className="grid grid-cols-1 xl:grid-cols-[560px_1fr] gap-8 items-start">
+  1178→  1178→        {/* Left Image */}
+  1179→  1179→        <div className="bg-white rounded-[26px] shadow-[0_18px_70px_rgba(23,23,27,0.09)] ring-1 ring-zinc-200 p-5">
+  1180→  1180→          <div className="relative mx-auto" style={{ width: imgDisplay.w, height: imgDisplay.h }}>
+  1181→  1181→            <img
+  1182→  1182→              ref={imgElRef}
+  1183→  1183→              src={imgSrc}
+  1184→  1184→              width={imgDisplay.w}
+  1185→  1185→              height={imgDisplay.h}
+  1186→  1186→              alt=""
+  1187→  1187→              className="rounded-[16px] block object-contain select-none"
+  1188→  1188→              draggable={false}
+  1189→  1189→            />
+  1190→  1190→            <canvas
+  1191→  1191→              ref={canvasRef}
+  1192→  1192→              width={imgDisplay.w}
+  1193→  1193→              height={imgDisplay.h}
+  1194→  1194→              className="absolute left-0 top-0 rounded-[16px] pointer-events-none"
+  1195→  1195→            />
+  1196→  1196→          </div>
+  1197→  1197→          <div className="flex items-center justify-between text-[11.9px] text-zinc-500 mt-3 px-1">
+  1198→  1198→            <span>Hover a metric on the right → overlay draws</span>
+  1199→  1199→            <span className="font-mono">{Object.keys(points).length} pts • {imgW}×{imgH}</span>
+  1200→  1200→          </div>
+  1201→  1201→        </div>
+  1202→  1202→
+  1203→  1203→        {/* Right Dashboard */}
+  1204→  1204→        <div className="bg-[#fcfcfd] rounded-[26px] ring-1 ring-zinc-200 shadow-[0_12px_60px_rgba(23,23,27,0.07)]">
+  1205→  1205→          <div className="px-6 pt-5 pb-4 border-b border-zinc-200/90 flex items-center justify-between">
+  1206→  1206→            <div className="text-[20.5px] font-[650] tracking-tight">All Ratios</div>
+  1207→  1207→            <div className="text-[12.4px] text-zinc-500">
+  1208→  1208→              Harmony Score <span className="text-[#06a9c9] font-[650]">{(overallScore).toFixed(1)}/10</span>
+  1209→  1209→            </div>
+  1210→  1210→          </div>
+  1211→  1211→
+  1212→  1212→          <div className="px-4 pb-5 pt-3 max-h-[760px] overflow-auto">
+  1213→  1213→            {Object.entries(grouped).map(([cat, rows]: any) => (
+  1214→  1214→              <div key={cat} className="mb-5">
+  1215→  1215→                <div className="px-2 text-[11.3px] uppercase tracking-wider text-zinc-400 mb-2">{cat}</div>
+  1216→  1216→                <div className="space-y-[10px]">
+  1217→  1217→                  {rows.map((r: any) => {
+  1218→  1218→                    const m = r.metric;
+  1219→  1219→                    const v = r.value;
+  1220→  1220→                    const s = r.score;
+  1221→  1221→                    const pct = v == null ? 50 : Math.max(0, Math.min(100,
+  1222→  1222→                      50 + ((v - m.ideal) / m.tolerance) * 50
+  1223→  1223→                    ));
+  1224→  1224→                    const active = hoverMetric === m.id;
+  1225→  1225→                    return (
+  1226→  1226→                      <div
+  1227→  1227→                        key={m.id}
+  1228→  1228→                        onMouseEnter={() => setHoverMetric(m.id)}
+  1229→  1229→                        onMouseLeave={() => setHoverMetric(null)}
+  1230→  1230→                        className={`rounded-[16px] border px-4 py-3 transition cursor-default ${active ? "bg-white border-zinc-300 shadow-sm" : "border-zinc-200/95 hover:bg-white"}`}
+  1231→  1231→                      >
+  1232→  1232→                        <div className="flex items-center justify-between text-[13.8px]">
+  1233→  1233→                          <div className="font-[550] text-zinc-800">{m.name}</div>
+  1234→  1234→                          <div className="text-[11.7px] text-[#069dbb] font-mono">Score: {s.toFixed(2)}/10</div>
+  1235→  1235→                        </div>
+  1236→  1236→                        <div className="text-[11.8px] text-zinc-500 mt-0.5">{m.description}</div>
+  1237→  1237→                        <div className="mt-3 relative">
+  1238→  1238→                          <div className="h-[10px] rounded-full"
+  1239→  1239→                            style={{
+  1240→  1240→                              background: "linear-gradient(90deg, #ff5252 0%, #ffca3a 22%, #3be8ff 50%, #ffca3a 78%, #ff5252 100%)",
+  1241→  1241→                            }}
+  1242→  1242→                          />
+  1243→  1243→                          <div
+  1244→  1244→                            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2"
+  1245→  1245→                            style={{ left: `${pct}%` }}
+  1246→  1246→                          >
+  1247→  1247→                            <div className="w-[18px] h-[18px] rounded-full bg-white shadow-[0_2px_10px_rgba(0,0,0,.18)] ring-[2.5px] ring-zinc-200" />
+  1248→  1248→                          </div>
+  1249→  1249→                        </div>
+  1250→  1250→                        <div className="flex justify-between mt-1.5 text-[11.5px] text-zinc-500 font-mono">
+  1251→  1251→                          <span>{v == null ? "—" : v.toFixed(m.unit === "°" ? 1 : 3)}{m.unit}</span>
+  1252→  1252→                          <span>ideal {m.ideal}{m.unit}</span>
+  1253→  1253→                        </div>
+  1254→  1254→                      </div>
+  1255→  1255→                    );
+  1256→  1256→                  })}
+  1257→  1257→                </div>
+  1258→  1258→              </div>
+  1259→  1259→            ))}
+  1260→  1260→          </div>
+  1261→  1261→
+  1262→  1262→          <div className="px-5 py-4 border-t border-zinc-200 text-[12px] text-zinc-500 flex items-center justify-between">
+  1263→  1263→            <span>Export: PNG • SVG • CSV • JSON (coming soon)</span>
+  1264→  1264→            <span className="font-mono">AnthroFace ISO/TR 7250-2</span>
+  1265→  1265→          </div>
+  1266→  1266→        </div>
+  1267→  1267→      </div>
+  1268→  1268→    </div>
+  1269→  1269→  );
+  1270→  1270→}
