@@ -1,0 +1,28 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# production build
+/build
+
+# misc
+*.pem
+tsconfig.tsbuildinfo
+next-env.d.ts
+
+# debug / logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev.log
+server.log
+
+# lockfiles from other package managers
+package-lock.json
+
+# local env files
+.env
+.env*.local
